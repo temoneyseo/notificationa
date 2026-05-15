@@ -1,0 +1,37 @@
+# Notification Hub configuration
+# Copy this file to config.yaml or config.yml, then adjust values.
+# Secrets should come from environment variables or .env, not from HTTP APIs.
+
+http_addr: 100.89.0.100:18080
+database_path: ./data/notification-hub.db
+encryption_key: ${ENCRYPTION_KEY}
+openai_api_key: ${OPENAI_API_KEY}
+openai_model: google/gemma-4-26b-a4b-it:free
+openai_base_url: https://openrouter.ai/api/v1
+openai_timeout: 120s
+log_inbound_messages: true
+
+channels:
+  - platform: telegram
+    name: telegram-main
+    default: true
+    active: true
+    ai_enabled: false
+    ai_prompt: ""
+    config:
+      bot_token: ${TELEGRAM_BOT_TOKEN}
+      chat_id: "${TELEGRAM_CHAT_ID}"
+
+  - platform: discord
+    name: discord-main
+    default: false
+    active: true
+    ai_enabled: false
+    ai_prompt: ""
+    config:
+      bot_token: ${DISCORD_BOT_TOKEN}
+      channel_id: "${DISCORD_CHANNEL_ID}"
+    rules:
+      - type: keyword
+        pattern: "urgent|紧急"
+        channels: ["discord"]

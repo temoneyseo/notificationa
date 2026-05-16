@@ -1,0 +1,10 @@
+/notification-hub
+/data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.worktrees/
+worktrees/
+.codex-workers/
+.claude/scheduled_tasks.lock

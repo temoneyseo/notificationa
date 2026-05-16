@@ -109,6 +109,61 @@ You can still inspect loaded channels. Secrets are masked:
 curl http://127.0.0.1:8080/api/v1/channels
 ```
 
+## Quick Send
+
+Use the shortcut endpoint when you just want to send a notification fast:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/notify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "text": "GSC traffic dropped 30%"
+  }'
+```
+
+By default, `/api/v1/notify` sends to Discord. Choose a target with `to`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/notify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "text": "Indexing alert: sitemap fetch failed",
+    "to": "telegram"
+  }'
+```
+
+Send to every active configured channel:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/notify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "text": "Daily notification smoke test",
+    "to": "all"
+  }'
+```
+
+Send to specific channels:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/notify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "text": "Urgent SEO alert",
+    "to": ["telegram", "discord"]
+  }'
+```
+
+If the service is running on another host, replace `127.0.0.1:8080` with your configured `HTTP_ADDR`, for example:
+
+```bash
+curl -X POST http://100.89.0.100:18080/api/v1/notify \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"hello from API","to":"all"}'
+```
+
+Use `/api/v1/messages` when you need priority, metadata, or AI processing.
+
 ## Send Messages
 
 ```bash

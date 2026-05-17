@@ -313,3 +313,107 @@ func TestLoadParsesSimpleYAMLWhenPresent(t *testing.T) {
 		t.Fatalf("OpenAI model = %q", cfg.OpenAI.Model)
 	}
 }
+
+func TestLoadParsesACPConfigAfterChannelsAndEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte(`channels:
+  - platform: telegram
+    name: telegram-main
+    config:
+      bot_token: ${TELEGRAM_BOT_TOKEN}
+      chat_id: "-100"
+
+acp:
+  enabled: true
+  endpoint_url: https://yaml.example/acp
+  auth_token: yaml-token
+  default_project: notification
+  default_agent: triage
+  min_confidence: 0.75
+  allowed_intents: ["docs_request", "incident"]
+`)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dotenv := []byte("TELEGRAM_BOT_TOKEN=telegram-token\nACP_AUTH_TOKEN=dotenv-token\n")
+	if err := os.WriteFile(filepath.Join(dir, ".env"), dotenv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("ACP_ENDPOINT_URL", "https://env.example/acp")
+	t.Setenv("ACP_MIN_CONFIDENCE", "0.91")
+	t.Setenv("ACP_ALLOWED_INTENTS", "support_request,docs_request")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if len(cfg.Channels) != 1 || cfg.Channels[0].Config["bot_token"] != "telegram-token" {
+		t.Fatalf("channels not parsed or env-expanded: %+v", cfg.Channels)
+	}
+	if !cfg.ACP.Enabled {
+		t.Fatal("ACP enabled should be true")
+	}
+	if cfg.ACP.EndpointURL != "https://env.example/acp" {
+		t.Fatalf("ACP endpoint = %q", cfg.ACP.EndpointURL)
+	}
+	if cfg.ACP.AuthToken != "dotenv-token" {
+		t.Fatalf("ACP auth token = %q", cfg.ACP.AuthToken)
+	}
+	if cfg.ACP.DefaultProject != "notification" || cfg.ACP.DefaultAgent != "triage" {
+		t.Fatalf("ACP defaults = %+v", cfg.ACP)
+	}
+	if cfg.ACP.MinConfidence != 0.91 {
+		t.Fatalf("ACP min confidence = %v", cfg.ACP.MinConfidence)
+	}
+	want := []string{"support_request", "docs_request"}
+	if len(cfg.ACP.AllowedIntents) != len(want) {
+		t.Fatalf("allowed intents = %+v", cfg.ACP.AllowedIntents)
+	}
+	for i := range want {
+		if cfg.ACP.AllowedIntents[i] != want[i] {
+			t.Fatalf("allowed intents = %+v", cfg.ACP.AllowedIntents)
+		}
+	}
+}
+
+func TestLoadTreatsUnresolvedACPPlaceholdersAsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte(`acp:
+  enabled: true
+  endpoint_url: ${ACP_ENDPOINT_URL}
+  auth_token: ${ACP_AUTH_TOKEN}
+`)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ACP.EndpointURL != "" {
+		t.Fatalf("ACP endpoint should be empty for unresolved placeholder, got %q", cfg.ACP.EndpointURL)
+	}
+	if cfg.ACP.AuthToken != "" {
+		t.Fatalf("ACP auth token should be empty for unresolved placeholder, got %q", cfg.ACP.AuthToken)
+	}
+}

@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -40,6 +41,87 @@ func TestInboundServiceStoresInboundAndTriggersSideEffects(t *testing.T) {
 	}
 	if dispatcher.event != "inbound.telegram" || !auto.called {
 		t.Fatalf("dispatcher event=%q auto called=%v", dispatcher.event, auto.called)
+	}
+}
+
+func TestInboundServiceCallsACPAfterWebhookAndBeforeAutoReply(t *testing.T) {
+	messages := newMemoryMessageRepo()
+	calls := []string{}
+	dispatcher := &fakeWebhookDispatcher{onDispatch: func() { calls = append(calls, "webhook") }}
+	acp := &fakeInboundACPForwarder{onForward: func() { calls = append(calls, "acp") }}
+	auto := &fakeAutoReply{onHandle: func() { calls = append(calls, "auto") }}
+	svc := NewInboundService(InboundDeps{
+		Messages:          messages,
+		WebhookDispatcher: dispatcher,
+		ACPForwarder:      acp,
+		AutoReply:         auto,
+	})
+
+	err := svc.HandleInbound(context.Background(), adapters.InboundMessage{
+		Platform:          "telegram",
+		ChannelID:         "-100",
+		PlatformMessageID: "m1",
+		AuthorID:          "u1",
+		AuthorName:        "alice",
+		Content:           "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound: %v", err)
+	}
+
+	want := []string{"webhook", "acp", "auto"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %+v", calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("calls = %+v", calls)
+		}
+	}
+	if acp.msg.ID == "" || acp.msg.ContentOriginal != "hello" || acp.msg.Metadata["channel_id"] != "-100" {
+		t.Fatalf("unexpected acp message: %+v", acp.msg)
+	}
+}
+
+func TestInboundServiceACPErrorDoesNotBlockAutoReply(t *testing.T) {
+	messages := newMemoryMessageRepo()
+	acp := &fakeInboundACPForwarder{err: errors.New("acp down")}
+	auto := &fakeAutoReply{}
+	svc := NewInboundService(InboundDeps{
+		Messages:     messages,
+		ACPForwarder: acp,
+		AutoReply:    auto,
+	})
+
+	err := svc.HandleInbound(context.Background(), adapters.InboundMessage{
+		Platform: "discord",
+		Content:  "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound should not return ACP error: %v", err)
+	}
+	if !auto.called {
+		t.Fatal("auto reply should still be called")
+	}
+}
+
+func TestInboundServiceNilACPKeepsExistingBehavior(t *testing.T) {
+	messages := newMemoryMessageRepo()
+	auto := &fakeAutoReply{}
+	svc := NewInboundService(InboundDeps{
+		Messages:  messages,
+		AutoReply: auto,
+	})
+
+	err := svc.HandleInbound(context.Background(), adapters.InboundMessage{
+		Platform: "telegram",
+		Content:  "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound: %v", err)
+	}
+	if !auto.called {
+		t.Fatal("auto reply should be called")
 	}
 }
 

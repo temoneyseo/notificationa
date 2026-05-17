@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -92,4 +93,92 @@ func TestWebhookRepositoryCRUD(t *testing.T) {
 	if len(hooks) != 1 || hooks[0].Secret != "encrypted-secret" {
 		t.Fatalf("unexpected hooks: %+v", hooks)
 	}
+}
+
+func TestACPOutboxRepositoryCreateGetAndStatusTransitions(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	repo := NewACPOutboxRepository(db)
+
+	event := &domain.ACPEvent{
+		Version:   domain.ACPEventVersion,
+		EventType: domain.ACPEventTypeChannelInboundAnalyzed,
+		MessageID: "msg_1",
+		Source:    domain.ACPEventSource{Platform: "telegram", ChannelID: "-100"},
+		Routing:   domain.ACPRouting{ShouldForward: true, Project: "notification", Agent: "triage", Priority: "normal", Confidence: 0.9},
+		Analysis:  domain.ACPAnalysis{Intent: "docs_request", Summary: "summary", Action: "action", Entities: []string{"README"}, Language: "en"},
+		Content:   domain.ACPContent{Original: "hello", Normalized: "hello"},
+	}
+	item := domain.NewACPOutboxItem("msg_1", event, `{"raw":true}`)
+	if err := repo.Create(ctx, item); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Event == nil || got.Event.MessageID != "msg_1" || got.Status != domain.ACPOutboxStatusPending {
+		t.Fatalf("unexpected item: %+v", got)
+	}
+	if got.EventJSON == "" || got.RawLLMOutput != `{"raw":true}` {
+		t.Fatalf("unexpected json/raw: event=%q raw=%q", got.EventJSON, got.RawLLMOutput)
+	}
+
+	if err := repo.MarkSkipped(ctx, item.ID, "low_confidence"); err != nil {
+		t.Fatalf("MarkSkipped: %v", err)
+	}
+	got, _ = repo.Get(ctx, item.ID)
+	if got.Status != domain.ACPOutboxStatusSkipped || got.SkipReason != "low_confidence" {
+		t.Fatalf("unexpected skipped item: %+v", got)
+	}
+
+	if err := repo.MarkFailed(ctx, item.ID, "endpoint returned 500", intPtr(500)); err != nil {
+		t.Fatalf("MarkFailed: %v", err)
+	}
+	got, _ = repo.Get(ctx, item.ID)
+	if got.Status != domain.ACPOutboxStatusFailed || got.ErrorMessage == "" || got.LastStatusCode == nil || *got.LastStatusCode != 500 || got.DispatchAttempts != 1 || got.LastAttemptedAt == nil {
+		t.Fatalf("unexpected failed item: %+v", got)
+	}
+
+	if err := repo.MarkDispatched(ctx, item.ID, 202); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	got, _ = repo.Get(ctx, item.ID)
+	if got.Status != domain.ACPOutboxStatusDispatched || got.LastStatusCode == nil || *got.LastStatusCode != 202 || got.DispatchAttempts != 2 || got.DispatchedAt == nil {
+		t.Fatalf("unexpected dispatched item: %+v", got)
+	}
+}
+
+func TestACPOutboxRepositoryAllowsMalformedOutputWithoutEventJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	repo := NewACPOutboxRepository(db)
+
+	item := domain.NewACPOutboxItem("msg_bad", nil, "not-json")
+	item.Status = domain.ACPOutboxStatusFailed
+	item.ErrorMessage = "parse error"
+	if err := repo.Create(ctx, item); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Event != nil || got.EventJSON != "" || got.RawLLMOutput != "not-json" || got.Status != domain.ACPOutboxStatusFailed {
+		t.Fatalf("unexpected malformed item: %+v", got)
+	}
+
+	var eventJSON sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT event_json FROM acp_outbox WHERE id = ?`, item.ID).Scan(&eventJSON); err != nil {
+		t.Fatalf("query event_json: %v", err)
+	}
+	if eventJSON.Valid {
+		t.Fatalf("event_json should be NULL, got %q", eventJSON.String)
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
 }

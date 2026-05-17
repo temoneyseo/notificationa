@@ -27,6 +27,8 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_TIMEOUT=30s
+ACP_ENDPOINT_URL=
+ACP_AUTH_TOKEN=
 ```
 
 Set `log_inbound_messages: true` in `config.yaml` to print incoming Telegram/Discord messages in the terminal where the service is running.
@@ -182,6 +184,63 @@ curl -X POST http://127.0.0.1:8080/api/v1/messages \
 ```
 
 If `channels` is empty, the service applies rules and then falls back to channels marked `is_default`.
+
+## ACP Forwarding
+
+ACP forwarding can analyze inbound Telegram/Discord messages into a stable internal event and POST approved events to a generic HTTP JSON endpoint. It is disabled by default.
+
+```yaml
+acp:
+  enabled: false
+  endpoint_url: ${ACP_ENDPOINT_URL}
+  auth_token: ${ACP_AUTH_TOKEN}
+  default_project: notification
+  default_agent: triage
+  min_confidence: 0.8
+  allowed_intents: ["docs_request", "incident", "support_request"]
+```
+
+Environment variables `ACP_ENDPOINT_URL`, `ACP_AUTH_TOKEN`, `ACP_ENABLED`, `ACP_DEFAULT_PROJECT`, `ACP_DEFAULT_AGENT`, `ACP_MIN_CONFIDENCE`, and `ACP_ALLOWED_INTENTS` override YAML values. `ACP_ALLOWED_INTENTS` is a comma-separated list; an empty list means no intent restriction.
+
+Forwarded event JSON:
+
+```json
+{
+  "version": "2026-05-17",
+  "event_type": "channel.inbound.analyzed",
+  "message_id": "msg_...",
+  "source": {
+    "platform": "telegram",
+    "channel_id": "-100123",
+    "author_id": "42",
+    "author_name": "alice"
+  },
+  "routing": {
+    "should_forward": true,
+    "project": "notification",
+    "agent": "triage",
+    "priority": "normal",
+    "confidence": 0.86
+  },
+  "analysis": {
+    "intent": "docs_request",
+    "summary": "README lacks quick API send examples.",
+    "action": "Add curl examples to the README.",
+    "entities": ["README", "API", "curl"],
+    "language": "en"
+  },
+  "content": {
+    "original": "README is missing quick API examples",
+    "normalized": "README is missing quick API message sending examples."
+  }
+}
+```
+
+Inbound handling remains: save message, dispatch existing webhooks, attempt ACP forwarding, then auto-reply. Existing webhook failure semantics are unchanged. ACP analysis, validation, HTTP, or endpoint failures are recorded in the local `acp_outbox` table and do not block auto-reply.
+
+Events are dispatched only when ACP is enabled, `endpoint_url` is configured, LLM JSON validates, `routing.should_forward` is true, confidence is at least `min_confidence`, and the intent is allowed when `allowed_intents` is configured. Rule misses are stored as `skipped`; malformed LLM output and HTTP failures are stored as `failed`.
+
+Security boundary: the LLM only receives whitelisted inbound context: content, platform, channel id, author id, author name, and message id. The HTTP request body contains only the internal ACP event. Bot tokens, decrypted channel config, OpenAI keys, webhook secrets, encryption keys, and ACP auth tokens are not included in the event body. The ACP auth token is sent only as `Authorization: Bearer <token>`.
 
 ## Inbox
 

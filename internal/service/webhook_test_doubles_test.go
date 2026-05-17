@@ -84,25 +84,47 @@ func (r *memoryWebhookRepo) MarkFailed(_ context.Context, id, message string) er
 }
 
 type fakeWebhookDispatcher struct {
-	event string
-	msg   domain.Message
+	event      string
+	msg        domain.Message
+	onDispatch func()
 }
 
 func (d *fakeWebhookDispatcher) Dispatch(_ context.Context, event string, msg domain.Message) error {
 	d.event = event
 	d.msg = msg
+	if d.onDispatch != nil {
+		d.onDispatch()
+	}
 	return nil
 }
 
 type fakeAutoReply struct {
-	called bool
-	msg    domain.Message
+	called   bool
+	msg      domain.Message
+	onHandle func()
 }
 
 func (a *fakeAutoReply) Handle(_ context.Context, msg domain.Message) error {
 	a.called = true
 	a.msg = msg
+	if a.onHandle != nil {
+		a.onHandle()
+	}
 	return nil
+}
+
+type fakeInboundACPForwarder struct {
+	msg       domain.Message
+	err       error
+	onForward func()
+}
+
+func (f *fakeInboundACPForwarder) ForwardInbound(_ context.Context, msg domain.Message) error {
+	f.msg = msg
+	if f.onForward != nil {
+		f.onForward()
+	}
+	return f.err
 }
 
 func nilListOptions() sqlite.MessageListOptions {

@@ -51,6 +51,23 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_webhook_configs_active ON webhook_configs(is_active)`,
+		`CREATE TABLE IF NOT EXISTS acp_outbox (
+			id TEXT PRIMARY KEY,
+			message_id TEXT NOT NULL,
+			event_json TEXT,
+			raw_llm_output TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			skip_reason TEXT NOT NULL DEFAULT '',
+			error_message TEXT NOT NULL DEFAULT '',
+			dispatch_attempts INTEGER NOT NULL DEFAULT 0,
+			last_status_code INTEGER,
+			last_attempted_at TEXT,
+			dispatched_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_acp_outbox_message_id ON acp_outbox(message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_acp_outbox_status_created_at ON acp_outbox(status, created_at)`,
 	}
 	for _, stmt := range statements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

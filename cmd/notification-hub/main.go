@@ -48,6 +48,7 @@ func run() error {
 	messages := sqlite.NewMessageRepository(db)
 	channels := service.NewConfigChannelStore(cfg.DomainChannels())
 	webhooks := sqlite.NewWebhookRepository(db)
+	acpOutbox := sqlite.NewACPOutboxRepository(db)
 	registry := service.NewAdapterRegistry()
 	registry.Register(telegram.New(telegram.AdapterConfig{HTTPClient: &http.Client{Timeout: 15 * time.Second}}))
 	registry.Register(discord.New(discord.AdapterConfig{HTTPClient: &http.Client{Timeout: 15 * time.Second}}))
@@ -66,9 +67,32 @@ func run() error {
 	})
 	webhookDispatcher := service.NewWebhookDispatcher(service.WebhookDispatcherDeps{Webhooks: webhooks, Cipher: cipher})
 	autoReply := service.NewAutoReplyService(channels, pipeline, processor)
+	var acpForwarder service.InboundACPForwarder
+	if cfg.ACP.Enabled && cfg.ACP.EndpointURL != "" {
+		acpClient := service.NewACPHTTPClient(service.ACPHTTPClientConfig{
+			EndpointURL: cfg.ACP.EndpointURL,
+			AuthToken:   cfg.ACP.AuthToken,
+		})
+		acpForwarder = service.NewACPForwarder(service.ACPForwarderDeps{
+			Analyzer: service.NewACPAnalyzer(service.ACPAnalyzerConfig{
+				Processor:      processor,
+				DefaultProject: cfg.ACP.DefaultProject,
+				DefaultAgent:   cfg.ACP.DefaultAgent,
+			}),
+			Outbox:     acpOutbox,
+			Dispatcher: service.NewACPDispatcher(acpClient),
+			Config: service.ACPForwardConfig{
+				Enabled:        cfg.ACP.Enabled,
+				EndpointURL:    cfg.ACP.EndpointURL,
+				MinConfidence:  cfg.ACP.MinConfidence,
+				AllowedIntents: cfg.ACP.AllowedIntents,
+			},
+		})
+	}
 	inbound := service.NewInboundService(service.InboundDeps{
 		Messages:             messages,
 		WebhookDispatcher:    webhookDispatcher,
+		ACPForwarder:         acpForwarder,
 		AutoReply:            autoReply,
 		LogInboundMessages:   cfg.LogInboundMessages,
 		InboundMessageWriter: os.Stdout,

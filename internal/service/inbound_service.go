@@ -19,9 +19,14 @@ type AutoReplier interface {
 	Handle(ctx context.Context, msg domain.Message) error
 }
 
+type InboundACPForwarder interface {
+	ForwardInbound(ctx context.Context, msg domain.Message) error
+}
+
 type InboundDeps struct {
 	Messages             MessageStore
 	WebhookDispatcher    WebhookDispatcher
+	ACPForwarder         InboundACPForwarder
 	AutoReply            AutoReplier
 	LogInboundMessages   bool
 	InboundMessageWriter io.Writer
@@ -62,6 +67,9 @@ func (s *InboundService) HandleInbound(ctx context.Context, inbound adapters.Inb
 		if err := s.deps.WebhookDispatcher.Dispatch(ctx, event, *msg); err != nil {
 			return err
 		}
+	}
+	if s.deps.ACPForwarder != nil {
+		_ = s.deps.ACPForwarder.ForwardInbound(ctx, *msg)
 	}
 	if s.deps.AutoReply != nil && msg.Source != "auto_reply" {
 		if err := s.deps.AutoReply.Handle(ctx, *msg); err != nil {

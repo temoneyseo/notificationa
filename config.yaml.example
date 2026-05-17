@@ -11,6 +11,15 @@ openai_base_url: https://openrouter.ai/api/v1
 openai_timeout: 120s
 log_inbound_messages: true
 
+acp:
+  enabled: false
+  endpoint_url: ${ACP_ENDPOINT_URL}
+  auth_token: ${ACP_AUTH_TOKEN}
+  default_project: notification
+  default_agent: triage
+  min_confidence: 0.8
+  allowed_intents: ["docs_request", "incident", "support_request"]
+
 channels:
   - platform: telegram
     name: telegram-main

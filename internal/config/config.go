@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,16 @@ type OpenAIConfig struct {
 	Model   string
 	BaseURL string
 	Timeout time.Duration
+}
+
+type ACPConfig struct {
+	Enabled        bool
+	EndpointURL    string
+	AuthToken      string
+	DefaultProject string
+	DefaultAgent   string
+	MinConfidence  float64
+	AllowedIntents []string
 }
 
 type ChannelConfig struct {
@@ -43,6 +54,7 @@ type Config struct {
 	ConfigPath         string
 	ShutdownTimeout    time.Duration
 	OpenAI             OpenAIConfig
+	ACP                ACPConfig
 	Channels           []ChannelConfig
 	LogInboundMessages bool
 }
@@ -64,6 +76,9 @@ func Load() (Config, error) {
 			BaseURL: "https://api.openai.com/v1",
 			Timeout: 30 * time.Second,
 		},
+		ACP: ACPConfig{
+			MinConfidence: 0.8,
+		},
 	}
 
 	if cfg.ConfigPath != "" {
@@ -79,6 +94,25 @@ func Load() (Config, error) {
 	cfg.OpenAI.APIKey = getenv("OPENAI_API_KEY", dotenv, cfg.OpenAI.APIKey)
 	cfg.OpenAI.Model = getenv("OPENAI_MODEL", dotenv, cfg.OpenAI.Model)
 	cfg.OpenAI.BaseURL = getenv("OPENAI_BASE_URL", dotenv, cfg.OpenAI.BaseURL)
+	cfg.ACP.EndpointURL = getenv("ACP_ENDPOINT_URL", dotenv, cfg.ACP.EndpointURL)
+	cfg.ACP.AuthToken = getenv("ACP_AUTH_TOKEN", dotenv, cfg.ACP.AuthToken)
+	cfg.ACP.DefaultProject = getenv("ACP_DEFAULT_PROJECT", dotenv, cfg.ACP.DefaultProject)
+	cfg.ACP.DefaultAgent = getenv("ACP_DEFAULT_AGENT", dotenv, cfg.ACP.DefaultAgent)
+	cfg.ACP.EndpointURL = emptyUnresolvedEnvValue(cfg.ACP.EndpointURL)
+	cfg.ACP.AuthToken = emptyUnresolvedEnvValue(cfg.ACP.AuthToken)
+	if v := getenv("ACP_ENABLED", dotenv, ""); v != "" {
+		cfg.ACP.Enabled = parseBool(v)
+	}
+	if v := getenv("ACP_MIN_CONFIDENCE", dotenv, ""); v != "" {
+		confidence, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ACP.MinConfidence = confidence
+	}
+	if v := getenv("ACP_ALLOWED_INTENTS", dotenv, ""); v != "" {
+		cfg.ACP.AllowedIntents = parseStringList(v)
+	}
 
 	if v := getenv("OPENAI_TIMEOUT", dotenv, ""); v != "" {
 		d, err := time.ParseDuration(v)
@@ -166,7 +200,15 @@ func loadYAML(path string, cfg *Config) error {
 				return err
 			}
 			cfg.Channels = channels
-			break
+			i = skipSection(lines, i+1) - 1
+			continue
+		}
+		if line == "acp:" {
+			if err := parseACPConfig(lines[i+1:], cfg); err != nil {
+				return err
+			}
+			i = skipSection(lines, i+1) - 1
+			continue
 		}
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) != 2 {
@@ -185,6 +227,8 @@ func loadYAML(path string, cfg *Config) error {
 			cfg.OpenAI.APIKey = value
 		case "openai_model":
 			cfg.OpenAI.Model = value
+		case "openai_base_url":
+			cfg.OpenAI.BaseURL = value
 		case "log_inbound_messages":
 			cfg.LogInboundMessages = parseBool(value)
 		case "openai_timeout":
@@ -194,6 +238,66 @@ func loadYAML(path string, cfg *Config) error {
 			}
 			cfg.OpenAI.Timeout = d
 		}
+	}
+	return nil
+}
+
+func skipSection(lines []string, start int) int {
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if leadingSpaces(lines[i]) == 0 && !strings.HasPrefix(line, "-") {
+			return i
+		}
+	}
+	return len(lines)
+}
+
+func parseACPConfig(lines []string, cfg *Config) error {
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if leadingSpaces(raw) == 0 && !strings.HasPrefix(line, "-") {
+			break
+		}
+		if leadingSpaces(raw) != 2 {
+			continue
+		}
+		key, value, ok := splitConfigPair(line)
+		if !ok {
+			continue
+		}
+		if err := setACPField(&cfg.ACP, key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func setACPField(acp *ACPConfig, key string, value string) error {
+	switch key {
+	case "enabled":
+		acp.Enabled = parseBool(value)
+	case "endpoint_url":
+		acp.EndpointURL = value
+	case "auth_token":
+		acp.AuthToken = value
+	case "default_project":
+		acp.DefaultProject = value
+	case "default_agent":
+		acp.DefaultAgent = value
+	case "min_confidence":
+		confidence, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return err
+		}
+		acp.MinConfidence = confidence
+	case "allowed_intents":
+		acp.AllowedIntents = parseStringList(value)
 	}
 	return nil
 }
@@ -361,6 +465,13 @@ func expandEnvValue(value string, dotenv map[string]string) string {
 	}
 	if env := dotenv[key]; env != "" {
 		return env
+	}
+	return value
+}
+
+func emptyUnresolvedEnvValue(value string) string {
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		return ""
 	}
 	return value
 }

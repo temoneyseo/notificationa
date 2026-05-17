@@ -10,6 +10,15 @@ openai_model: google/gemma-4-26b-a4b-it:free
 openai_base_url: https://openrouter.ai/api/v1
 openai_timeout: 120s
 
+acp:
+  enabled: false
+  endpoint_url: ${ACP_ENDPOINT_URL}
+  auth_token: ${ACP_AUTH_TOKEN}
+  default_project: notification
+  default_agent: triage
+  min_confidence: 0.8
+  allowed_intents: []
+
 channels:
   - platform: telegram
     name: telegram-main

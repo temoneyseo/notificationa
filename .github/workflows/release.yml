@@ -214,7 +214,11 @@ jobs:
         run: |
           set -euo pipefail
           cd release-artifacts
-          sha256sum * > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum * > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt"
+          else
+            shasum -a 256 * > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt"
+          fi
 
       - name: Upload release assets with gh
         shell: bash

@@ -35,3 +35,8 @@ if ! grep -q "latest" "$workflow"; then
   echo "release workflow must publish a rolling latest release for main" >&2
   exit 1
 fi
+
+if ! grep -q "shasum -a 256" "$workflow"; then
+  echo "release workflow must fall back to shasum -a 256 for macOS checksums" >&2
+  exit 1
+fi

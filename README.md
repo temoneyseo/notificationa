@@ -20,7 +20,7 @@ Notification Hub is a Go + Gin + SQLite service for routing notifications to Tel
 Environment variables:
 
 ```env
-HTTP_ADDR=:18080
+HTTP_ADDR=127.0.0.1:18080
 DATABASE_PATH=./data/notification-hub.db
 ENCRYPTION_KEY=change-me-32-bytes-minimum-secret
 OPENAI_API_KEY=
@@ -34,6 +34,8 @@ ACP_AUTH_TOKEN=
 Set `log_inbound_messages: true` in `config.yaml` to print incoming Telegram/Discord messages in the terminal where the service is running.
 
 `ENCRYPTION_KEY` must be 16, 24, or 32 bytes, or base64 for one of those lengths.
+
+The example `config.yaml` binds to `127.0.0.1:18080` so it works on machines without Tailscale. To expose the service over Tailscale, set `http_addr` or `HTTP_ADDR` to your `100.x.y.z:18080` address. Use `:18080` only when you want to listen on all interfaces.
 
 ## Run Locally
 

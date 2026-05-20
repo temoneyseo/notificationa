@@ -3,8 +3,25 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestExampleConfigsDefaultToLocalhost(t *testing.T) {
+	for _, path := range []string{"../../config.yaml", "../../config.yaml.example"} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		if !strings.Contains(text, "http_addr: 127.0.0.1:18080") {
+			t.Fatalf("%s should default http_addr to 127.0.0.1:18080", path)
+		}
+		if strings.Contains(text, "http_addr: 100.89.0.100:18080") {
+			t.Fatalf("%s should not default http_addr to a machine-specific Tailscale address", path)
+		}
+	}
+}
 
 func TestLoadParsesLogInboundMessages(t *testing.T) {
 	dir := t.TempDir()

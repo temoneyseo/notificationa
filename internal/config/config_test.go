@@ -1,24 +1,58 @@
 package config
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestExampleConfigsDefaultToLocalhost(t *testing.T) {
+func TestDefaultHTTPAddrPrefersTailscaleIP(t *testing.T) {
+	addr := defaultHTTPAddr(func() ([]net.IP, error) {
+		return []net.IP{
+			net.ParseIP("192.168.1.10"),
+			net.ParseIP("100.89.0.100"),
+		}, nil
+	})
+
+	if addr != "100.89.0.100:18080" {
+		t.Fatalf("defaultHTTPAddr = %q, want 100.89.0.100:18080", addr)
+	}
+}
+
+func TestDefaultHTTPAddrFallsBackToLocalhost(t *testing.T) {
+	addr := defaultHTTPAddr(func() ([]net.IP, error) {
+		return []net.IP{net.ParseIP("192.168.1.10")}, nil
+	})
+
+	if addr != "127.0.0.1:18080" {
+		t.Fatalf("defaultHTTPAddr = %q, want 127.0.0.1:18080", addr)
+	}
+}
+
+func TestDefaultHTTPAddrIgnoresNonTailscale100Range(t *testing.T) {
+	addr := defaultHTTPAddr(func() ([]net.IP, error) {
+		return []net.IP{net.ParseIP("100.200.1.1")}, nil
+	})
+
+	if addr != "127.0.0.1:18080" {
+		t.Fatalf("defaultHTTPAddr = %q, want 127.0.0.1:18080", addr)
+	}
+}
+
+func TestExampleConfigsUseAutomaticHTTPAddr(t *testing.T) {
 	for _, path := range []string{"../../config.yaml", "../../config.yaml.example"} {
 		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := string(content)
-		if !strings.Contains(text, "http_addr: 127.0.0.1:18080") {
-			t.Fatalf("%s should default http_addr to 127.0.0.1:18080", path)
+		if strings.Contains(text, "http_addr: 100.89.0.100:18080") || strings.Contains(text, "\nhttp_addr:") {
+			t.Fatalf("%s should not hardcode http_addr by default", path)
 		}
-		if strings.Contains(text, "http_addr: 100.89.0.100:18080") {
-			t.Fatalf("%s should not default http_addr to a machine-specific Tailscale address", path)
+		if !strings.Contains(text, "http_addr: 100.x.y.z:18080") || !strings.Contains(text, "http_addr: 127.0.0.1:18080") {
+			t.Fatalf("%s should document explicit Tailscale and localhost http_addr examples", path)
 		}
 	}
 }
@@ -213,7 +247,7 @@ channels:
 	}
 }
 
-func TestLoadDefaultsToHighPort(t *testing.T) {
+func TestLoadDefaultsToAutomaticHighPortAddress(t *testing.T) {
 	dir := t.TempDir()
 	oldwd, err := os.Getwd()
 	if err != nil {
@@ -231,8 +265,11 @@ func TestLoadDefaultsToHighPort(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if cfg.HTTPAddr != ":18080" {
-		t.Fatalf("HTTPAddr = %q, want :18080", cfg.HTTPAddr)
+	if !strings.HasSuffix(cfg.HTTPAddr, ":18080") {
+		t.Fatalf("HTTPAddr = %q, want address ending in :18080", cfg.HTTPAddr)
+	}
+	if cfg.HTTPAddr != "127.0.0.1:18080" && !strings.HasPrefix(cfg.HTTPAddr, "100.") {
+		t.Fatalf("HTTPAddr = %q, want localhost or Tailscale address", cfg.HTTPAddr)
 	}
 }
 

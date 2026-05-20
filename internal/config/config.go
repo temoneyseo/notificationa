@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"errors"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -66,7 +67,7 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:           ":18080",
+		HTTPAddr:           defaultHTTPAddr(interfaceIPs),
 		DatabasePath:       "./data/notification-hub.db",
 		ConfigPath:         defaultConfigPath(getenv("APP_CONFIG", dotenv, "")),
 		ShutdownTimeout:    10 * time.Second,
@@ -156,6 +157,47 @@ func copyConfigMap(input map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func defaultHTTPAddr(listIPs func() ([]net.IP, error)) string {
+	ips, err := listIPs()
+	if err != nil {
+		return "127.0.0.1:18080"
+	}
+	for _, ip := range ips {
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		if isTailscaleIP(ip) {
+			return ip.String() + ":18080"
+		}
+	}
+	return "127.0.0.1:18080"
+}
+
+func interfaceIPs() ([]net.IP, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, addr := range addrs {
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ips = append(ips, v.IP)
+		case *net.IPAddr:
+			ips = append(ips, v.IP)
+		}
+	}
+	return ips, nil
+}
+
+func isTailscaleIP(ip net.IP) bool {
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return false
+	}
+	return ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127
 }
 
 func defaultConfigPath(configPath string) string {

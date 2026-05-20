@@ -2,9 +2,11 @@
 # Copy this file to config.yaml or config.yml, then adjust values.
 # Secrets should come from environment variables or .env, not from HTTP APIs.
 
-# Local-only default. For Tailscale access, set this to your 100.x.y.z address.
-# Use :18080 to listen on all interfaces.
-http_addr: 127.0.0.1:18080
+# Omit http_addr to auto-bind a Tailscale 100.64.0.0/10 address when available,
+# otherwise 127.0.0.1:18080. Set explicitly when needed:
+# http_addr: 100.x.y.z:18080
+# http_addr: 127.0.0.1:18080
+# http_addr: :18080
 database_path: ./data/notification-hub.db
 encryption_key: ${ENCRYPTION_KEY}
 openai_api_key: ${OPENAI_API_KEY}

@@ -1,0 +1,24 @@
+[Unit]
+Description=Notification Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=notification-hub
+Group=notification-hub
+EnvironmentFile=/etc/notification-hub/notification-hub.env
+ExecStart=/usr/local/bin/notification-hub --log /var/log/notification-hub/notification-hub.log
+Restart=on-failure
+RestartSec=5s
+WorkingDirectory=/var/lib/notification-hub
+StateDirectory=notification-hub
+LogsDirectory=notification-hub
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/notification-hub /var/log/notification-hub
+
+[Install]
+WantedBy=multi-user.target

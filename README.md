@@ -48,6 +48,81 @@ Health check:
 curl http://127.0.0.1:8080/health
 ```
 
+## Release Binaries
+
+Tagged releases publish prebuilt archives for common platforms:
+
+- macOS Apple Silicon: `notification-hub-<version>-darwin-arm64.tar.gz`
+- macOS Intel: `notification-hub-<version>-darwin-amd64.tar.gz`
+- Linux AMD64: `notification-hub-<version>-linux-amd64.tar.gz`
+- Linux ARM64: `notification-hub-<version>-linux-arm64.tar.gz`
+- Windows AMD64: `notification-hub-<version>-windows-amd64.zip`
+
+Download the archive for your platform, extract it, copy `notification-hub` or `notification-hub.exe` onto your `PATH`, and configure the required environment variables.
+
+## Log File Output
+
+By default, Notification Hub writes process logs to the terminal. Use `--log` to append logs to a file:
+
+```bash
+ENCRYPTION_KEY=0123456789abcdef0123456789abcdef \
+  notification-hub --log ./notification-hub.log
+```
+
+The log file must be in an existing directory. When `log_inbound_messages: true` is enabled in `config.yaml`, inbound Telegram and Discord message logs are written to the same target.
+
+## Service Deployment
+
+The `deploy/` directory contains templates for running Notification Hub as a host service. Service deployments need the same environment variables as local runs: `HTTP_ADDR`, `DATABASE_PATH`, `ENCRYPTION_KEY`, bot tokens, OpenAI settings, and optional ACP settings.
+
+### Linux systemd
+
+1. Copy the release binary to `/usr/local/bin/notification-hub`.
+2. Install the service files:
+
+```bash
+sudo sh deploy/systemd/install.sh
+```
+
+3. Edit `/etc/notification-hub/notification-hub.env` and set real secrets.
+4. Start the service:
+
+```bash
+sudo systemctl start notification-hub
+sudo systemctl status notification-hub
+```
+
+The default database path is `/var/lib/notification-hub/notification-hub.db`. The default application log path is `/var/log/notification-hub/notification-hub.log`.
+
+### macOS launchd
+
+1. Copy the release binary to `/usr/local/bin/notification-hub`.
+2. Install the launchd files:
+
+```bash
+sudo sh deploy/launchd/install.sh
+```
+
+3. Edit `/usr/local/etc/notification-hub/notification-hub.env` and set real secrets.
+4. Restart the service:
+
+```bash
+sudo launchctl kickstart -k system/com.notification-hub
+sudo launchctl print system/com.notification-hub
+```
+
+The default database path is `/usr/local/var/notification-hub/notification-hub.db`. The default application log path is `/usr/local/var/log/notification-hub.log`.
+
+### Windows service
+
+Use the WinSW example in `deploy/windows/`. The Windows service runs:
+
+```powershell
+notification-hub.exe --log logs\notification-hub.log
+```
+
+See `deploy/windows/README.md` for installation and uninstall commands.
+
 ## Docker
 
 ```bash

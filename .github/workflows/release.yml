@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install SQLite build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev libsqlite3-dev
+
+      - name: Test
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            runner: macos-13
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            runner: macos-14
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+            archive: zip
+            cc: x86_64-w64-mingw32-gcc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Linux SQLite build dependencies
+        if: matrix.goos == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev libsqlite3-dev
+
+      - name: Install macOS SQLite build dependencies
+        if: matrix.goos == 'darwin'
+        run: brew install sqlite
+
+      - name: Set up Windows MinGW toolchain
+        if: matrix.goos == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-sqlite3
+
+      - name: Verify Windows compiler
+        if: matrix.goos == 'windows'
+        shell: msys2 {0}
+        run: |
+          which x86_64-w64-mingw32-gcc
+          x86_64-w64-mingw32-gcc --version
+
+      - name: Build Unix binary
+        if: matrix.goos != 'windows'
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+          CC: ${{ matrix.cc || 'gcc' }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="${GITHUB_REF_NAME:-dev}"
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" -o dist/notification-hub ./cmd/notification-hub
+          cp README.md config.yaml.example .env.example dist/
+
+      - name: Build Windows binary
+        if: matrix.goos == 'windows'
+        shell: msys2 {0}
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '1'
+          CC: x86_64-w64-mingw32-gcc
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="${GITHUB_REF_NAME:-dev}"
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" -o dist/notification-hub.exe ./cmd/notification-hub
+          cp README.md config.yaml.example .env.example dist/
+
+      - name: Package Unix archive
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="notification-hub-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          tar -C dist -czf "${archive}" .
+          mkdir -p artifacts
+          mv "${archive}" artifacts/
+
+      - name: Package Windows archive
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $archive = "notification-hub-${env:GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+          Compress-Archive -Path dist\* -DestinationPath $archive
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Move-Item $archive artifacts\
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: notification-hub-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd release-artifacts
+          sha256sum * > checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/*
+          generate_release_notes: true

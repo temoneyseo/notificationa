@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -28,6 +31,15 @@ func main() {
 }
 
 func run() error {
+	logPath := flag.String("log", "", "append logs to the specified file")
+	flag.Parse()
+
+	logWriter, cleanupLog, err := configureLogOutput(*logPath)
+	if err != nil {
+		return err
+	}
+	defer cleanupLog()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -95,7 +107,7 @@ func run() error {
 		ACPForwarder:         acpForwarder,
 		AutoReply:            autoReply,
 		LogInboundMessages:   cfg.LogInboundMessages,
-		InboundMessageWriter: os.Stdout,
+		InboundMessageWriter: logWriter,
 	})
 	listenerCtx, stopListeners := context.WithCancel(context.Background())
 	defer stopListeners()
@@ -130,12 +142,32 @@ func run() error {
 	}
 }
 
+func configureLogOutput(path string) (io.Writer, func(), error) {
+	if path == "" {
+		return log.Writer(), func() {}, nil
+	}
+
+	previousWriter := log.Writer()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("open log file %q: %w", path, err)
+	}
+	log.SetOutput(file)
+	return file, func() {
+		log.SetOutput(previousWriter)
+		if err := file.Close(); err != nil {
+			log.Printf("close log file: %v", err)
+		}
+	}, nil
+}
+
 func startInboundListeners(ctx context.Context, channels service.ChannelStore, inbound *service.InboundService) {
 	configured, err := channels.ListActive(ctx)
 	if err != nil {
 		log.Printf("load inbound channels: %v", err)
 		return
 	}
+	startedDiscordTokens := map[string]bool{}
 	for _, channel := range configured {
 		decrypted := channel.Config
 		switch channel.Platform {
@@ -156,6 +188,10 @@ func startInboundListeners(ctx context.Context, channels service.ChannelStore, i
 			if token == "" {
 				continue
 			}
+			if startedDiscordTokens[token] {
+				continue
+			}
+			startedDiscordTokens[token] = true
 			gateway := discord.NewGateway("", token, inbound)
 			go func() {
 				if err := gateway.Start(ctx); err != nil && ctx.Err() == nil {

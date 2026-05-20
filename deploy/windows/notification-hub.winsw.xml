@@ -1,0 +1,31 @@
+<service>
+  <id>notification-hub</id>
+  <name>Notification Hub</name>
+  <description>Routes notifications to Telegram and Discord and collects inbound messages.</description>
+  <executable>%BASE%\notification-hub.exe</executable>
+  <arguments>--log %BASE%\logs\notification-hub.log</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <env name="HTTP_ADDR" value=":8080" />
+  <env name="DATABASE_PATH" value="%BASE%\data\notification-hub.db" />
+  <env name="ENCRYPTION_KEY" value="change-me-32-bytes-minimum-secret" />
+  <env name="OPENAI_API_KEY" value="" />
+  <env name="OPENAI_MODEL" value="gpt-4o-mini" />
+  <env name="OPENAI_BASE_URL" value="https://api.openai.com/v1" />
+  <env name="OPENAI_TIMEOUT" value="30s" />
+  <env name="ACP_ENDPOINT_URL" value="" />
+  <env name="ACP_AUTH_TOKEN" value="" />
+  <env name="ACP_ENABLED" value="false" />
+  <env name="ACP_DEFAULT_PROJECT" value="notification" />
+  <env name="ACP_DEFAULT_AGENT" value="triage" />
+  <env name="ACP_MIN_CONFIDENCE" value="0.8" />
+  <env name="ACP_ALLOWED_INTENTS" value="docs_request,incident,support_request" />
+  <env name="TELEGRAM_BOT_TOKEN" value="" />
+  <env name="TELEGRAM_CHAT_ID" value="" />
+  <env name="DISCORD_BOT_TOKEN" value="" />
+  <env name="DISCORD_CHANNEL_ID" value="" />
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+  <onfailure action="restart" delay="5 sec" />
+</service>

@@ -3,7 +3,9 @@ package discord
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,30 +19,61 @@ const (
 	gatewayHello     = 10
 )
 
+var ErrGatewayAuthenticationFailed = errors.New("discord gateway authentication failed")
+
 type Gateway struct {
-	url     string
-	token   string
-	handler adapters.InboundHandler
-	dialer  *websocket.Dialer
+	url          string
+	token        string
+	handler      adapters.InboundHandler
+	dialer       *websocket.Dialer
+	retryDelay   time.Duration
+	stormBackoff time.Duration
 }
 
 func NewGateway(url, token string, handler adapters.InboundHandler) *Gateway {
 	if url == "" {
 		url = "wss://gateway.discord.gg/?v=10&encoding=json"
 	}
-	return &Gateway{url: url, token: token, handler: handler, dialer: websocket.DefaultDialer}
+	return &Gateway{
+		url:          url,
+		token:        token,
+		handler:      handler,
+		dialer:       websocket.DefaultDialer,
+		retryDelay:   5 * time.Second,
+		stormBackoff: 5 * time.Minute,
+	}
 }
 
 func (g *Gateway) Start(ctx context.Context) error {
 	if g.token == "" || g.handler == nil {
 		return nil
 	}
+	attempts := 0
 	for {
+		attempts++
 		if err := g.connectOnce(ctx); err != nil {
+			if errors.Is(err, ErrGatewayAuthenticationFailed) {
+				log.Printf("ERROR discord gateway authentication failed: token is invalid or reset by Discord. Stop reconnecting. Generate a new DISCORD_BOT_TOKEN before restarting.")
+				return err
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Printf("WARN discord gateway disconnected: attempt=%d error=%v", attempts, err)
+			if attempts >= 5 {
+				log.Printf("WARN discord gateway reconnect storm: %d attempts, backing off for %s", attempts, g.stormBackoff)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(g.stormBackoff):
+				}
+				attempts = 0
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(5 * time.Second):
+			case <-time.After(g.retryDelay):
 			}
 			continue
 		}
@@ -54,6 +87,8 @@ func (g *Gateway) connectOnce(ctx context.Context) error {
 		return err
 	}
 	defer conn.Close()
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	for {
 		select {
 		case <-ctx.Done():
@@ -62,7 +97,7 @@ func (g *Gateway) connectOnce(ctx context.Context) error {
 		}
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			return err
+			return classifyGatewayReadError(err)
 		}
 		var event gatewayPayload
 		if err := json.Unmarshal(data, &event); err != nil {
@@ -74,7 +109,7 @@ func (g *Gateway) connectOnce(ctx context.Context) error {
 				HeartbeatInterval int `json:"heartbeat_interval"`
 			}
 			_ = json.Unmarshal(event.Data, &hello)
-			go heartbeat(ctx, conn, time.Duration(hello.HeartbeatInterval)*time.Millisecond)
+			go heartbeat(connCtx, conn, time.Duration(hello.HeartbeatInterval)*time.Millisecond)
 			if err := conn.WriteJSON(gatewayPayload{Op: gatewayIdentify, Data: mustJSON(map[string]any{
 				"token":   g.token,
 				"intents": 33280,
@@ -94,6 +129,14 @@ func (g *Gateway) connectOnce(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func classifyGatewayReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr.Code == 4004 {
+		return fmt.Errorf("%w: discord close code %d %s", ErrGatewayAuthenticationFailed, closeErr.Code, closeErr.Text)
+	}
+	return err
 }
 
 func (g *Gateway) handleMessage(ctx context.Context, data json.RawMessage) error {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,13 +15,20 @@ import (
 )
 
 const (
-	gatewayDispatch  = 0
-	gatewayHeartbeat = 1
-	gatewayIdentify  = 2
-	gatewayHello     = 10
+	gatewayDispatch       = 0
+	gatewayHeartbeat      = 1
+	gatewayIdentify       = 2
+	gatewayResume         = 6
+	gatewayReconnect      = 7
+	gatewayInvalidSession = 9
+	gatewayHello          = 10
+	gatewayHeartbeatACK   = 11
 )
 
-var ErrGatewayAuthenticationFailed = errors.New("discord gateway authentication failed")
+var (
+	ErrGatewayAuthenticationFailed = errors.New("discord gateway authentication failed")
+	errGatewayReconnectable        = errors.New("discord gateway reconnectable")
+)
 
 type Gateway struct {
 	url          string
@@ -28,6 +37,12 @@ type Gateway struct {
 	dialer       *websocket.Dialer
 	retryDelay   time.Duration
 	stormBackoff time.Duration
+
+	stateMu          sync.RWMutex
+	sequence         int64
+	hasSequence      bool
+	sessionID        string
+	resumeGatewayURL string
 }
 
 func NewGateway(url, token string, handler adapters.InboundHandler) *Gateway {
@@ -82,21 +97,34 @@ func (g *Gateway) Start(ctx context.Context) error {
 }
 
 func (g *Gateway) connectOnce(ctx context.Context) error {
-	conn, _, err := g.dialer.DialContext(ctx, g.url, nil)
+	connectURL, resume := g.nextConnection()
+	conn, _, err := g.dialer.DialContext(ctx, connectURL, nil)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	writer := &gatewayConnWriter{conn: conn}
+	heartbeatState := &gatewayHeartbeatState{}
+	heartbeatState.acked.Store(true)
+	heartbeatErr := make(chan error, 1)
+	heartbeatStarted := false
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case err := <-heartbeatErr:
+			return err
 		default:
 		}
 		_, data, err := conn.ReadMessage()
 		if err != nil {
+			select {
+			case heartbeatErr := <-heartbeatErr:
+				return heartbeatErr
+			default:
+			}
 			return classifyGatewayReadError(err)
 		}
 		var event gatewayPayload
@@ -109,24 +137,40 @@ func (g *Gateway) connectOnce(ctx context.Context) error {
 				HeartbeatInterval int `json:"heartbeat_interval"`
 			}
 			_ = json.Unmarshal(event.Data, &hello)
-			go heartbeat(connCtx, conn, time.Duration(hello.HeartbeatInterval)*time.Millisecond)
-			if err := conn.WriteJSON(gatewayPayload{Op: gatewayIdentify, Data: mustJSON(map[string]any{
-				"token":   g.token,
-				"intents": 33280,
-				"properties": map[string]string{
-					"os":      "linux",
-					"browser": "notification-hub",
-					"device":  "notification-hub",
-				},
-			})}); err != nil {
+			if err := writer.writeJSON(g.identifyPayload(resume)); err != nil {
 				return err
 			}
+			if !heartbeatStarted {
+				heartbeatStarted = true
+				go g.heartbeat(connCtx, writer, heartbeatState, time.Duration(hello.HeartbeatInterval)*time.Millisecond, heartbeatErr)
+			}
 		case gatewayDispatch:
+			g.updateSequence(event.Sequence)
+			if event.Type == "READY" {
+				if err := g.handleReady(event.Data); err != nil {
+					return err
+				}
+			}
 			if event.Type == "MESSAGE_CREATE" {
 				if err := g.handleMessage(ctx, event.Data); err != nil {
 					return err
 				}
 			}
+		case gatewayHeartbeat:
+			if err := g.sendHeartbeat(writer, heartbeatState, false); err != nil {
+				return err
+			}
+		case gatewayReconnect:
+			return fmt.Errorf("%w: discord requested reconnect", errGatewayReconnectable)
+		case gatewayInvalidSession:
+			var resumable bool
+			_ = json.Unmarshal(event.Data, &resumable)
+			if !resumable {
+				g.clearResumeState()
+			}
+			return fmt.Errorf("%w: discord invalid session resumable=%t", errGatewayReconnectable, resumable)
+		case gatewayHeartbeatACK:
+			heartbeatState.acked.Store(true)
 		}
 	}
 }
@@ -137,6 +181,140 @@ func classifyGatewayReadError(err error) error {
 		return fmt.Errorf("%w: discord close code %d %s", ErrGatewayAuthenticationFailed, closeErr.Code, closeErr.Text)
 	}
 	return err
+}
+
+func (g *Gateway) nextConnection() (string, bool) {
+	g.stateMu.RLock()
+	defer g.stateMu.RUnlock()
+	if g.sessionID != "" && g.resumeGatewayURL != "" && g.hasSequence {
+		return g.resumeGatewayURL, true
+	}
+	return g.url, false
+}
+
+func (g *Gateway) identifyPayload(resume bool) gatewayPayload {
+	if !resume {
+		return gatewayPayload{Op: gatewayIdentify, Data: mustJSON(map[string]any{
+			"token":   g.token,
+			"intents": 33280,
+			"properties": map[string]string{
+				"os":      "linux",
+				"browser": "notification-hub",
+				"device":  "notification-hub",
+			},
+		})}
+	}
+	g.stateMu.RLock()
+	sessionID := g.sessionID
+	sequence := g.sequence
+	g.stateMu.RUnlock()
+	return gatewayPayload{Op: gatewayResume, Data: mustJSON(map[string]any{
+		"token":      g.token,
+		"session_id": sessionID,
+		"seq":        sequence,
+	})}
+}
+
+func (g *Gateway) updateSequence(data json.RawMessage) {
+	if len(data) == 0 || string(data) == "null" {
+		return
+	}
+	var sequence int64
+	if err := json.Unmarshal(data, &sequence); err != nil {
+		return
+	}
+	g.stateMu.Lock()
+	g.sequence = sequence
+	g.hasSequence = true
+	g.stateMu.Unlock()
+}
+
+func (g *Gateway) handleReady(data json.RawMessage) error {
+	var ready struct {
+		SessionID        string `json:"session_id"`
+		ResumeGatewayURL string `json:"resume_gateway_url"`
+	}
+	if err := json.Unmarshal(data, &ready); err != nil {
+		return err
+	}
+	g.stateMu.Lock()
+	g.sessionID = ready.SessionID
+	g.resumeGatewayURL = ready.ResumeGatewayURL
+	g.stateMu.Unlock()
+	return nil
+}
+
+func (g *Gateway) clearResumeState() {
+	g.stateMu.Lock()
+	g.sequence = 0
+	g.hasSequence = false
+	g.sessionID = ""
+	g.resumeGatewayURL = ""
+	g.stateMu.Unlock()
+}
+
+func (g *Gateway) heartbeatData() json.RawMessage {
+	g.stateMu.RLock()
+	defer g.stateMu.RUnlock()
+	if !g.hasSequence {
+		return json.RawMessage("null")
+	}
+	return mustJSON(g.sequence)
+}
+
+func (g *Gateway) sendHeartbeat(writer *gatewayConnWriter, state *gatewayHeartbeatState, requirePreviousACK bool) error {
+	if requirePreviousACK && !state.acked.Load() {
+		_ = writer.close()
+		return fmt.Errorf("%w: discord heartbeat ack timeout", errGatewayReconnectable)
+	}
+	if err := writer.writeJSON(gatewayPayload{Op: gatewayHeartbeat, Data: g.heartbeatData()}); err != nil {
+		return err
+	}
+	state.acked.Store(false)
+	return nil
+}
+
+func (g *Gateway) heartbeat(ctx context.Context, writer *gatewayConnWriter, state *gatewayHeartbeatState, interval time.Duration, errCh chan<- error) {
+	if interval <= 0 {
+		interval = 45 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := g.sendHeartbeat(writer, state, true); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+		}
+	}
+}
+
+type gatewayConnWriter struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func (w *gatewayConnWriter) writeJSON(v any) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WriteJSON(v)
+}
+
+func (w *gatewayConnWriter) close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.Close()
+}
+
+type gatewayHeartbeatState struct {
+	acked atomic.Bool
 }
 
 func (g *Gateway) handleMessage(ctx context.Context, data json.RawMessage) error {
@@ -169,26 +347,11 @@ func (g *Gateway) handleMessage(ctx context.Context, data json.RawMessage) error
 	})
 }
 
-func heartbeat(ctx context.Context, conn *websocket.Conn, interval time.Duration) {
-	if interval <= 0 {
-		interval = 45 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_ = conn.WriteJSON(gatewayPayload{Op: gatewayHeartbeat})
-		}
-	}
-}
-
 type gatewayPayload struct {
-	Op   int             `json:"op"`
-	Data json.RawMessage `json:"d,omitempty"`
-	Type string          `json:"t,omitempty"`
+	Op       int             `json:"op"`
+	Data     json.RawMessage `json:"d"`
+	Sequence json.RawMessage `json:"s,omitempty"`
+	Type     string          `json:"t,omitempty"`
 }
 
 func mustJSON(v any) json.RawMessage {

@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -15,13 +17,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
 
       - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
+        run: |
+          set -euo pipefail
+          version=$(awk '/^go / {print $2}' go.mod)
+          curl -fsSL "https://go.dev/dl/go${version}.linux-amd64.tar.gz" -o /tmp/go.tgz
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf /tmp/go.tgz
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
 
       - name: Install SQLite build dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev libsqlite3-dev
@@ -29,9 +41,53 @@ jobs:
       - name: Test
         run: go test ./...
 
+  prepare-release:
+    name: Prepare release
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      title: ${{ steps.release.outputs.title }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - name: Prepare release with gh
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            title="${GITHUB_REF_NAME}"
+            prerelease="false"
+          else
+            tag="latest"
+            title="Latest main build"
+            prerelease="true"
+            git init .
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git fetch --depth=1 origin "${GITHUB_SHA}"
+            git tag -f latest "${GITHUB_SHA}"
+            git push -f origin latest
+          fi
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes || true
+          fi
+
+          if [ "$prerelease" = "true" ]; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "Automated build from ${GITHUB_SHA}." --prerelease
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --generate-notes
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
-    needs: test
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
@@ -60,13 +116,41 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Set up Go on Unix
+        if: matrix.goos != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk '/^go / {print $2}' go.mod)
+          os="linux"
+          arch="amd64"
+          if [ "${{ matrix.goos }}" = "darwin" ]; then os="darwin"; fi
+          if [ "${{ matrix.goarch }}" = "arm64" ]; then arch="arm64"; fi
+          curl -fsSL "https://go.dev/dl/go${version}.${os}-${arch}.tar.gz" -o /tmp/go.tgz
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf /tmp/go.tgz
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Go on Windows
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path go.mod -Pattern '^go ').Line.Split(' ')[1]
+          $url = "https://go.dev/dl/go$version.windows-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\go.zip"
+          if (Test-Path "$env:RUNNER_TEMP\go") { Remove-Item -Recurse -Force "$env:RUNNER_TEMP\go" }
+          Expand-Archive "$env:RUNNER_TEMP\go.zip" -DestinationPath "$env:RUNNER_TEMP"
+          "$env:RUNNER_TEMP\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Linux SQLite build dependencies
         if: matrix.goos == 'linux'
@@ -78,22 +162,20 @@ jobs:
 
       - name: Set up Windows MinGW toolchain
         if: matrix.goos == 'windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-sqlite3
+        shell: pwsh
+        run: |
+          choco install msys2 -y --no-progress
+          C:\tools\msys64\usr\bin\bash.exe -lc "pacman -Sy --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-sqlite3"
+          "C:\tools\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify Windows compiler
         if: matrix.goos == 'windows'
-        shell: msys2 {0}
+        shell: bash
         run: |
           which x86_64-w64-mingw32-gcc
           x86_64-w64-mingw32-gcc --version
 
-      - name: Build Unix binary
+      - name: Build Unix archive
         if: matrix.goos != 'windows'
         shell: bash
         env:
@@ -103,14 +185,16 @@ jobs:
           CC: ${{ matrix.cc || 'gcc' }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-          version="${GITHUB_REF_NAME:-dev}"
+          mkdir -p dist release-artifacts
+          version="${{ needs.prepare-release.outputs.tag }}"
           go build -trimpath -ldflags "-s -w -X main.version=${version}" -o dist/notification-hub ./cmd/notification-hub
           cp README.md config.yaml.example .env.example dist/
+          archive="notification-hub-${version}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          tar -C dist -czf "release-artifacts/${archive}" .
 
-      - name: Build Windows binary
+      - name: Build Windows archive
         if: matrix.goos == 'windows'
-        shell: msys2 {0}
+        shell: bash
         env:
           GOOS: windows
           GOARCH: amd64
@@ -118,55 +202,24 @@ jobs:
           CC: x86_64-w64-mingw32-gcc
         run: |
           set -euo pipefail
-          mkdir -p dist
-          version="${GITHUB_REF_NAME:-dev}"
+          mkdir -p dist release-artifacts
+          version="${{ needs.prepare-release.outputs.tag }}"
           go build -trimpath -ldflags "-s -w -X main.version=${version}" -o dist/notification-hub.exe ./cmd/notification-hub
           cp README.md config.yaml.example .env.example dist/
+          archive="notification-hub-${version}-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+          powershell -NoLogo -NoProfile -Command "Compress-Archive -Path dist/* -DestinationPath release-artifacts/${archive}"
 
-      - name: Package Unix archive
-        if: matrix.archive == 'tar.gz'
+      - name: Generate checksum
         shell: bash
         run: |
           set -euo pipefail
-          archive="notification-hub-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-          tar -C dist -czf "${archive}" .
-          mkdir -p artifacts
-          mv "${archive}" artifacts/
-
-      - name: Package Windows archive
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          $archive = "notification-hub-${env:GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
-          Compress-Archive -Path dist\* -DestinationPath $archive
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Move-Item $archive artifacts\
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: notification-hub-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: artifacts/*
-          if-no-files-found: error
-
-  release:
-    name: Publish GitHub Release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-          merge-multiple: true
-
-      - name: Generate checksums
-        run: |
           cd release-artifacts
-          sha256sum * > checksums.txt
+          sha256sum * > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt"
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-artifacts/*
-          generate_release_notes: true
+      - name: Upload release assets with gh
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" release-artifacts/* --repo "$GITHUB_REPOSITORY" --clobber

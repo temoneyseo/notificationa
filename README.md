@@ -20,7 +20,7 @@ Notification Hub is a Go + Gin + SQLite service for routing notifications to Tel
 Environment variables:
 
 ```env
-HTTP_ADDR=:8080
+HTTP_ADDR=:18080
 DATABASE_PATH=./data/notification-hub.db
 ENCRYPTION_KEY=change-me-32-bytes-minimum-secret
 OPENAI_API_KEY=
@@ -45,7 +45,7 @@ ENCRYPTION_KEY=0123456789abcdef0123456789abcdef go run ./cmd/notification-hub
 Health check:
 
 ```bash
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:18080/health
 ```
 
 ## Release Binaries
@@ -183,7 +183,7 @@ DELETE /api/v1/channels/:id -> 501 channels are managed by config
 You can still inspect loaded channels. Secrets are masked:
 
 ```bash
-curl http://127.0.0.1:8080/api/v1/channels
+curl http://127.0.0.1:18080/api/v1/channels
 ```
 
 ## Quick Send
@@ -191,7 +191,7 @@ curl http://127.0.0.1:8080/api/v1/channels
 Use the shortcut endpoint when you just want to send a notification fast:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/notify \
+curl -X POST http://127.0.0.1:18080/api/v1/notify \
   -H 'Content-Type: application/json' \
   -d '{
     "text": "GSC traffic dropped 30%"
@@ -201,7 +201,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/notify \
 By default, `/api/v1/notify` sends to Discord. Choose a target with `to`:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/notify \
+curl -X POST http://127.0.0.1:18080/api/v1/notify \
   -H 'Content-Type: application/json' \
   -d '{
     "text": "Indexing alert: sitemap fetch failed",
@@ -212,7 +212,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/notify \
 Send to every active configured channel:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/notify \
+curl -X POST http://127.0.0.1:18080/api/v1/notify \
   -H 'Content-Type: application/json' \
   -d '{
     "text": "Daily notification smoke test",
@@ -223,7 +223,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/notify \
 Send to specific channels:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/notify \
+curl -X POST http://127.0.0.1:18080/api/v1/notify \
   -H 'Content-Type: application/json' \
   -d '{
     "text": "Urgent SEO alert",
@@ -231,7 +231,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/notify \
   }'
 ```
 
-If the service is running on another host, replace `127.0.0.1:8080` with your configured `HTTP_ADDR`, for example:
+If the service is running on another host, replace `127.0.0.1:18080` with your configured `HTTP_ADDR`, for example:
 
 ```bash
 curl -X POST http://100.89.0.100:18080/api/v1/notify \
@@ -244,7 +244,7 @@ Use `/api/v1/messages` when you need priority, metadata, or AI processing.
 ## Send Messages
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/messages \
+curl -X POST http://127.0.0.1:18080/api/v1/messages \
   -H 'Content-Type: application/json' \
   -d '{
     "content": "GSC traffic dropped 30%",
@@ -320,13 +320,13 @@ Security boundary: the LLM only receives whitelisted inbound context: content, p
 ## Inbox
 
 ```bash
-curl 'http://127.0.0.1:8080/api/v1/messages/inbox?channel=telegram&limit=20&offset=0'
+curl 'http://127.0.0.1:18080/api/v1/messages/inbox?channel=telegram&limit=20&offset=0'
 ```
 
 ## Webhooks
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/webhooks \
+curl -X POST http://127.0.0.1:18080/api/v1/webhooks \
   -H 'Content-Type: application/json' \
   -d '{
     "url": "https://example.com/api/notifications",

@@ -5,7 +5,7 @@
   <executable>%BASE%\notification-hub.exe</executable>
   <arguments>--log %BASE%\logs\notification-hub.log</arguments>
   <workingdirectory>%BASE%</workingdirectory>
-  <env name="HTTP_ADDR" value=":8080" />
+  <env name="HTTP_ADDR" value=":18080" />
   <env name="DATABASE_PATH" value="%BASE%\data\notification-hub.db" />
   <env name="ENCRYPTION_KEY" value="change-me-32-bytes-minimum-secret" />
   <env name="OPENAI_API_KEY" value="" />

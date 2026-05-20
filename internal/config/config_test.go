@@ -196,6 +196,29 @@ channels:
 	}
 }
 
+func TestLoadDefaultsToHighPort(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	t.Setenv("APP_CONFIG", filepath.Join(dir, "missing.yaml"))
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.HTTPAddr != ":18080" {
+		t.Fatalf("HTTPAddr = %q, want :18080", cfg.HTTPAddr)
+	}
+}
+
 func TestLoadReadsDotEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	dotenv := []byte("HTTP_ADDR=:18081\nDATABASE_PATH=./data/from-dotenv.db\nENCRYPTION_KEY=0123456789abcdef0123456789abcdef\nOPENAI_MODEL=from-dotenv\n")

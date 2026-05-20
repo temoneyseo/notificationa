@@ -66,7 +66,7 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:           ":8080",
+		HTTPAddr:           ":18080",
 		DatabasePath:       "./data/notification-hub.db",
 		ConfigPath:         defaultConfigPath(getenv("APP_CONFIG", dotenv, "")),
 		ShutdownTimeout:    10 * time.Second,

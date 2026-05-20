@@ -17,11 +17,11 @@ WORKDIR /app
 COPY --from=build /out/notification-hub /usr/local/bin/notification-hub
 COPY .env.example /app/.env.example
 
-ENV HTTP_ADDR=:8080
+ENV HTTP_ADDR=:18080
 ENV DATABASE_PATH=/data/notification-hub.db
 
 VOLUME ["/data"]
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1:8080/health || exit 1
+EXPOSE 18080
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1:18080/health || exit 1
 
 ENTRYPOINT ["notification-hub"]

@@ -96,23 +96,23 @@ jobs:
             goarch: amd64
             runner: ubuntu-latest
             archive: tar.gz
-          - goos: linux
-            goarch: arm64
-            runner: ubuntu-24.04-arm
-            archive: tar.gz
-          - goos: darwin
-            goarch: amd64
-            runner: macos-13
-            archive: tar.gz
+          # - goos: linux
+          #   goarch: arm64
+          #   runner: ubuntu-24.04-arm
+          #   archive: tar.gz
+          # - goos: darwin
+          #   goarch: amd64
+          #   runner: macos-13
+          #   archive: tar.gz
           - goos: darwin
             goarch: arm64
             runner: macos-14
             archive: tar.gz
-          - goos: windows
-            goarch: amd64
-            runner: windows-latest
-            archive: zip
-            cc: x86_64-w64-mingw32-gcc
+          # - goos: windows
+          #   goarch: amd64
+          #   runner: windows-latest
+          #   archive: zip
+          #   cc: x86_64-w64-mingw32-gcc
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
